@@ -13,7 +13,7 @@ logging.basicConfig(
 # Allowed TeraBox domains
 ALLOWED_HOSTS: Set[str] = {
     "terabox.app",
-    "www.erabox.app",
+    "www.terabox.app",
     "teraboxshare.com",
     "www.teraboxshare.com",
     "terabox.com",
@@ -25,6 +25,14 @@ ALLOWED_HOSTS: Set[str] = {
     "terafileshare.com",
     "terasharelink.com",
 }
+
+# Rate Limiting Configuration
+RATE_LIMIT = 30
+RATE_WINDOW = 60
+
+# Cache Configuration
+CACHE_TTL = 60
+CACHE_MAX_SIZE = 500
 
 # Proxy configuration
 PROXY_BASE_URL: str = "https://teracast-proxy.abdulraffaynajam.workers.dev/"
