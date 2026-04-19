@@ -1,0 +1,16 @@
+# Core Flask Framework
+Flask[async]>=3.1,<4
+Werkzeug>=3.1,<4
+
+# Async HTTP Client
+aiohttp>=3.9,<4
+
+# Environment Variables
+python-dotenv>=1.0,<2
+
+# Production Server (optional)
+gunicorn>=21.2,<22
+
+# Development Tools (optional)
+black>=23.12,<24
+flake8>=6.1,<7
