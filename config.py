@@ -27,7 +27,7 @@ ALLOWED_HOSTS: Set[str] = {
 }
 
 # Proxy configuration
-PROXY_BASE_URL: str = "https://tbx-proxy.shakir-ansarii075.workers.dev/"
+PROXY_BASE_URL: str = "https://teracast-proxy.abdulraffaynajam.workers.dev/"
 PROXY_MODE_RESOLVE: str = "resolve"
 PROXY_MODE_PAGE: str = "page"
 PROXY_MODE_API: str = "api"
