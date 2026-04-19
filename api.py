@@ -12,12 +12,26 @@ import cache
 
 
 def format_response_time(seconds: float) -> str:
+    """Format response time with appropriate unit."""
     if seconds >= 60:
         return f"{round(seconds / 60, 2)}m"
     return f"{round(seconds, 3)}s"
 
 
+def format_file_size(size_bytes: int) -> str:
+    """Convert bytes to human readable format."""
+    if size_bytes == 0:
+        return "0 B"
+    size_names = ["B", "KB", "MB", "GB", "TB"]
+    i = 0
+    while size_bytes >= 1024 and i < len(size_names) - 1:
+        size_bytes /= 1024
+        i += 1
+    return f"{size_bytes:.2f} {size_names[i]}"
+
+
 def create_app() -> Flask:
+    """Create and configure Flask application."""
     app = Flask(__name__)
     return app
 
@@ -27,6 +41,7 @@ app = create_app()
 
 @app.after_request
 def add_cors_headers(resp):
+    """Add CORS headers to all responses."""
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
@@ -35,6 +50,7 @@ def add_cors_headers(resp):
 
 @app.route("/")
 def index():
+    """API information endpoint."""
     return jsonify({
         "name": "TeraCast API",
         "version": "1.0.0",
@@ -53,6 +69,7 @@ def index():
 
 @app.route("/health")
 def health():
+    """Health check endpoint."""
     return jsonify({
         "status": "healthy",
         "version": "1.0.0",
@@ -100,7 +117,7 @@ def api():
         link_data = fetch_terabox_files(url, password)
         
         # Handle errors
-        if isinstance(link_data, dict) and "error" in link_
+        if isinstance(link_data, dict) and "error" in link_data:
             return jsonify({
                 "status": "error",
                 "url": url,
@@ -109,7 +126,7 @@ def api():
             }), 500
         
         # Success
-        if link_data and "list" in link_
+        if link_data and "list" in link_data:
             cache.put(url, link_data, password)
             
             return jsonify({
@@ -161,7 +178,7 @@ def api2():
         link_data = fetch_terabox_files(url, password)
         
         # Handle errors
-        if isinstance(link_data, dict) and "error" in link_
+        if isinstance(link_data, dict) and "error" in link_data:
             return jsonify({
                 "status": "error",
                 "url": url,
@@ -169,7 +186,7 @@ def api2():
             }), 500
         
         # Success - format with direct_link
-        if link_data and "list" in link_
+        if link_data and "list" in link_data:
             files = []
             for item in link_data["list"]:
                 file_info = {
@@ -207,40 +224,33 @@ def api2():
         }), 500
 
 
-def format_file_size(size_bytes: int) -> str:
-    """Convert bytes to human readable format."""
-    if size_bytes == 0:
-        return "0 B"
-    size_names = ["B", "KB", "MB", "GB", "TB"]
-    i = 0
-    while size_bytes >= 1024 and i < len(size_names) - 1:
-        size_bytes /= 1024
-        i += 1
-    return f"{size_bytes:.2f} {size_names[i]}"
-
-
 @app.route("/help")
 def help_page():
+    """API documentation endpoint."""
     return jsonify({
         "TeraCast API Documentation": {
             "version": "1.0.0",
+            "description": "Extract file information and direct download links from TeraBox",
             "endpoints": {
                 "GET /": "API information",
                 "GET /health": "Health check",
                 "GET /api": "File listing (url, pwd)",
                 "GET /api2": "Direct download links (url, pwd)"
-            }
+            },
+            "example": "/api2?url=https://1024terabox.com/s/SHARE_ID"
         }
     })
 
 
 @app.errorhandler(404)
 def not_found(error):
+    """Handle 404 errors."""
     return jsonify({"status": "error", "message": "Endpoint not found"}), 404
 
 
 @app.errorhandler(500)
 def internal_error(error):
+    """Handle 500 errors."""
     return jsonify({"status": "error", "message": "Internal server error"}), 500
 
 
