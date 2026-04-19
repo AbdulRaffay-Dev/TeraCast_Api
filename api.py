@@ -1,58 +1,40 @@
-"""TeraCast API - Main Flask Application."""
-from flask import Flask, request, jsonify, Response
+"""TeraCast API - Direct TeraBox Integration (No Cloudflare)."""
+from flask import Flask, request, jsonify
 from datetime import datetime, timezone
 import logging
 import time
-import aiohttp
-import asyncio
 
-from config import (
-    headers, load_cookies, PROXY_BASE_URL, 
-    PROXY_MODE_RESOLVE, PROXY_MODE_PAGE, PROXY_MODE_API,
-    PROXY_MODE_STREAM, PROXY_MODE_SEGMENT
-)
+from config import load_cookies
 from utils import is_valid_share_url
-from terabox_client import (
-    fetch_download_link, fetch_direct_links,
-    _gather_format_file_info, _normalize_api2_items
-)
+from terabox_direct import fetch_terabox_files
 from rate_limiter import rate_limit
 import cache
 
 
 def format_response_time(seconds: float) -> str:
-    """Format response time with appropriate unit."""
     if seconds >= 60:
         return f"{round(seconds / 60, 2)}m"
     return f"{round(seconds, 3)}s"
 
 
 def create_app() -> Flask:
-    """Create and configure Flask application."""
     app = Flask(__name__)
     return app
 
 
-# Create app instance
 app = create_app()
 
 
-# CORS headers for browser access
 @app.after_request
-def add_cors_headers(resp: Response) -> Response:
-    """Add CORS headers to all responses."""
+def add_cors_headers(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-API-Key"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return resp
-
-
-# =============== API ROUTES ===============
 
 
 @app.route("/")
 def index():
-    """API information endpoint."""
     return jsonify({
         "name": "TeraCast API",
         "version": "1.0.0",
@@ -60,7 +42,7 @@ def index():
         "description": "Professional TeraBox Video Streaming & Downloader API",
         "endpoints": {
             "/": "API information",
-            "/api": "File listing and proxy modes",
+            "/api": "File listing",
             "/api2": "Direct download links",
             "/health": "Health check",
             "/help": "Documentation"
@@ -71,7 +53,6 @@ def index():
 
 @app.route("/health")
 def health():
-    """Health check endpoint."""
     return jsonify({
         "status": "healthy",
         "version": "1.0.0",
@@ -82,34 +63,15 @@ def health():
 @app.route("/api", methods=["GET"])
 @rate_limit
 def api():
-    """
-    Unified API endpoint - file listing and proxy modes.
-    """
+    """File listing endpoint."""
     try:
         start_time = time.time()
-        mode = request.args.get("mode")
         url = request.args.get("url")
         
-        # ===== PROXY MODE =====
-        if mode:
-            # Run async code in sync context
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                result = loop.run_until_complete(proxy_request(mode, request.args))
-                return result
-            finally:
-                loop.close()
-        
-        # ===== FILE LISTING MODE =====
         if not url:
             return jsonify({
                 "status": "error",
-                "message": "Missing required parameter: url or mode",
-                "examples": {
-                    "file_listing": "/api?url=https://terabox.com/s/...",
-                    "proxy_mode": "/api?mode=resolve&surl=abc123"
-                }
+                "message": "Missing required parameter: url"
             }), 400
         
         if not is_valid_share_url(url):
@@ -124,59 +86,37 @@ def api():
         # Check cache
         cached = cache.get(url, password)
         if cached:
-            # Run async in sync
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                formatted_files = loop.run_until_complete(_gather_format_file_info(cached))
-            finally:
-                loop.close()
-            
             return jsonify({
                 "status": "success",
                 "url": url,
-                "files": formatted_files,
-                "total_files": len(formatted_files),
+                "files": cached.get("list", []),
+                "total_files": len(cached.get("list", [])),
                 "response_time": format_response_time(time.time() - start_time),
                 "cached": True,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
         
-        # Fetch from TeraBox
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            link_data = loop.run_until_complete(fetch_download_link(url, password))
-        finally:
-            loop.close()
+        # Fetch from TeraBox directly
+        link_data = fetch_terabox_files(url, password)
         
         # Handle errors
-        if isinstance(link_data, dict) and "error" in link_data:
-            status_code = 400 if link_data.get("requires_password") else 500
+        if isinstance(link_data, dict) and "error" in link_
             return jsonify({
                 "status": "error",
                 "url": url,
                 "error": link_data["error"],
-                "errno": link_data.get("errno"),
                 "message": link_data.get("message", "")
-            }), status_code
+            }), 500
         
         # Success
-        if link_data:
+        if link_data and "list" in link_
             cache.put(url, link_data, password)
-            
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                formatted_files = loop.run_until_complete(_gather_format_file_info(link_data))
-            finally:
-                loop.close()
             
             return jsonify({
                 "status": "success",
                 "url": url,
-                "files": formatted_files,
-                "total_files": len(formatted_files),
+                "files": link_data.get("list", []),
+                "total_files": len(link_data.get("list", [])),
                 "response_time": format_response_time(time.time() - start_time),
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
@@ -194,34 +134,10 @@ def api():
         }), 500
 
 
-async def proxy_request(mode, args):
-    """Handle proxy mode requests."""
-    cookies = load_cookies()
-    params = {"mode": mode}
-    
-    # Add all query params except 'mode'
-    for key, value in args.items():
-        if key != "mode":
-            params[key] = value
-    
-    async with aiohttp.ClientSession(headers=headers, cookies=cookies) as session:
-        async with session.get(PROXY_BASE_URL, params=params) as response:
-            content = await response.read()
-            content_type = response.headers.get("Content-Type", "application/json")
-            
-            return Response(
-                content,
-                status=response.status,
-                content_type=content_type
-            )
-
-
 @app.route("/api2", methods=["GET"])
 @rate_limit
 def api2():
-    """
-    Alternative API endpoint with direct download links.
-    """
+    """Direct download links endpoint."""
     try:
         start_time = time.time()
         url = request.args.get("url")
@@ -241,37 +157,39 @@ def api2():
         password = request.args.get("pwd", "")
         logging.info(f"API2 request: {url}")
         
-        # Fetch direct links
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            link_data = loop.run_until_complete(fetch_direct_links(url, password))
-        finally:
-            loop.close()
+        # Fetch from TeraBox directly
+        link_data = fetch_terabox_files(url, password)
         
         # Handle errors
-        if isinstance(link_data, dict) and "error" in link_data:
+        if isinstance(link_data, dict) and "error" in link_
             return jsonify({
                 "status": "error",
                 "url": url,
-                "error": link_data["error"],
-                "errno": link_data.get("errno")
+                "error": link_data["error"]
             }), 500
         
-        # Success
-        if link_data:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                formatted_files = loop.run_until_complete(_normalize_api2_items(link_data))
-            finally:
-                loop.close()
+        # Success - format with direct_link
+        if link_data and "list" in link_
+            files = []
+            for item in link_data["list"]:
+                file_info = {
+                    "file_name": item.get("server_filename", item.get("file_name", "Unknown")),
+                    "size": item.get("size", 0),
+                    "size_readable": format_file_size(item.get("size", 0)),
+                    "fs_id": item.get("fs_id"),
+                    "path": item.get("path"),
+                }
+                if "download_link" in item:
+                    file_info["direct_link"] = item["download_link"]
+                if "thumbs" in item and item["thumbs"]:
+                    file_info["thumbnail"] = item["thumbs"].get("url3")
+                files.append(file_info)
             
             return jsonify({
                 "status": "success",
                 "url": url,
-                "files": formatted_files,
-                "total_files": len(formatted_files),
+                "files": files,
+                "total_files": len(files),
                 "response_time": format_response_time(time.time() - start_time),
                 "timestamp": datetime.now(timezone.utc).isoformat()
             })
@@ -289,53 +207,33 @@ def api2():
         }), 500
 
 
+def format_file_size(size_bytes: int) -> str:
+    """Convert bytes to human readable format."""
+    if size_bytes == 0:
+        return "0 B"
+    size_names = ["B", "KB", "MB", "GB", "TB"]
+    i = 0
+    while size_bytes >= 1024 and i < len(size_names) - 1:
+        size_bytes /= 1024
+        i += 1
+    return f"{size_bytes:.2f} {size_names[i]}"
+
+
 @app.route("/help")
 def help_page():
-    """API documentation endpoint."""
     return jsonify({
         "TeraCast API Documentation": {
             "version": "1.0.0",
-            "description": "Extract file information and direct download links from TeraBox",
             "endpoints": {
                 "GET /": "API information",
                 "GET /health": "Health check",
-                "GET /api": {
-                    "description": "File listing and proxy modes",
-                    "parameters": {
-                        "url": "TeraBox share URL (for file listing)",
-                        "mode": "Proxy mode: resolve, page, api, stream, segment",
-                        "surl": "Short URL ID (for proxy modes)",
-                        "pwd": "Password for protected links (optional)"
-                    },
-                    "examples": [
-                        "/api?url=https://terabox.com/s/abc123",
-                        "/api?mode=resolve&surl=abc123"
-                    ]
-                },
-                "GET /api2": {
-                    "description": "Direct download links",
-                    "parameters": {
-                        "url": "TeraBox share URL (required)",
-                        "pwd": "Password (optional)"
-                    }
-                }
-            },
-            "response_format": {
-                "success": {
-                    "status": "success",
-                    "files": "Array of file objects",
-                    "total_files": "Number of files"
-                },
-                "error": {
-                    "status": "error",
-                    "message": "Error description"
-                }
+                "GET /api": "File listing (url, pwd)",
+                "GET /api2": "Direct download links (url, pwd)"
             }
         }
     })
 
 
-# Error handlers
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({"status": "error", "message": "Endpoint not found"}), 404
