@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import logging
 import time
 import aiohttp
-import os
+import asyncio
 
 from config import (
     headers, load_cookies, PROXY_BASE_URL, 
@@ -81,15 +81,9 @@ def health():
 
 @app.route("/api", methods=["GET"])
 @rate_limit
-async def api():
+def api():
     """
     Unified API endpoint - file listing and proxy modes.
-    
-    Query Parameters:
-        - url: TeraBox share URL (for file listing)
-        - mode: Proxy mode (resolve, page, api, stream, segment)
-        - surl: Short URL ID (for proxy modes)
-        - pwd: Password (optional, for protected links)
     """
     try:
         start_time = time.time()
@@ -98,25 +92,14 @@ async def api():
         
         # ===== PROXY MODE =====
         if mode:
-            cookies = load_cookies()
-            params = {"mode": mode}
-            
-            # Add all query params except 'mode'
-            for key, value in request.args.items():
-                if key != "mode":
-                    params[key] = value
-            
-            # Make proxy request
-            async with aiohttp.ClientSession(headers=headers, cookies=cookies) as session:
-                async with session.get(PROXY_BASE_URL, params=params) as response:
-                    content = await response.read()
-                    content_type = response.headers.get("Content-Type", "application/json")
-                    
-                    return Response(
-                        content,
-                        status=response.status,
-                        content_type=content_type
-                    )
+            # Run async code in sync context
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(proxy_request(mode, request.args))
+                return result
+            finally:
+                loop.close()
         
         # ===== FILE LISTING MODE =====
         if not url:
@@ -141,7 +124,14 @@ async def api():
         # Check cache
         cached = cache.get(url, password)
         if cached:
-            formatted_files = await _gather_format_file_info(cached)
+            # Run async in sync
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                formatted_files = loop.run_until_complete(_gather_format_file_info(cached))
+            finally:
+                loop.close()
+            
             return jsonify({
                 "status": "success",
                 "url": url,
@@ -153,7 +143,12 @@ async def api():
             })
         
         # Fetch from TeraBox
-        link_data = await fetch_download_link(url, password)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            link_data = loop.run_until_complete(fetch_download_link(url, password))
+        finally:
+            loop.close()
         
         # Handle errors
         if isinstance(link_data, dict) and "error" in link_data:
@@ -169,7 +164,13 @@ async def api():
         # Success
         if link_data:
             cache.put(url, link_data, password)
-            formatted_files = await _gather_format_file_info(link_data)
+            
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                formatted_files = loop.run_until_complete(_gather_format_file_info(link_data))
+            finally:
+                loop.close()
             
             return jsonify({
                 "status": "success",
@@ -193,15 +194,33 @@ async def api():
         }), 500
 
 
+async def proxy_request(mode, args):
+    """Handle proxy mode requests."""
+    cookies = load_cookies()
+    params = {"mode": mode}
+    
+    # Add all query params except 'mode'
+    for key, value in args.items():
+        if key != "mode":
+            params[key] = value
+    
+    async with aiohttp.ClientSession(headers=headers, cookies=cookies) as session:
+        async with session.get(PROXY_BASE_URL, params=params) as response:
+            content = await response.read()
+            content_type = response.headers.get("Content-Type", "application/json")
+            
+            return Response(
+                content,
+                status=response.status,
+                content_type=content_type
+            )
+
+
 @app.route("/api2", methods=["GET"])
 @rate_limit
-async def api2():
+def api2():
     """
     Alternative API endpoint with direct download links.
-    
-    Query Parameters:
-        - url: TeraBox share URL (required)
-        - pwd: Password (optional)
     """
     try:
         start_time = time.time()
@@ -223,7 +242,12 @@ async def api2():
         logging.info(f"API2 request: {url}")
         
         # Fetch direct links
-        link_data = await fetch_direct_links(url, password)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            link_data = loop.run_until_complete(fetch_direct_links(url, password))
+        finally:
+            loop.close()
         
         # Handle errors
         if isinstance(link_data, dict) and "error" in link_data:
@@ -236,7 +260,12 @@ async def api2():
         
         # Success
         if link_data:
-            formatted_files = await _normalize_api2_items(link_data)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                formatted_files = loop.run_until_complete(_normalize_api2_items(link_data))
+            finally:
+                loop.close()
             
             return jsonify({
                 "status": "success",
